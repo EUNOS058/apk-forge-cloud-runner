@@ -1,0 +1,137 @@
+name: APK Forge Cloud Build Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      framework:
+        description: 'Target Framework (React Native, Expo, Flutter, PWA/HTML)'
+        required: true
+        default: 'React Native'
+      app_name:
+        description: 'Application Display Name'
+        required: true
+        default: 'MyAwesomeApp'
+      build_tag:
+        description: 'Unique Build Identification Tag'
+        required: true
+        default: 'build_001'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Flutter SDK (Conditional)
+        if: ${{ inputs.framework == 'Flutter' }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Prepare Workspace & Unzip Source
+        run: |
+          echo "Starting APK Forge Build for ${{ inputs.app_name }} (${{ inputs.framework }}) - Tag: ${{ inputs.build_tag }}"
+          mkdir -p workspace
+          if [ -f "incoming/project.zip" ]; then
+            unzip -o incoming/project.zip -d workspace/
+          elif [ -f "project.zip" ]; then
+            unzip -o project.zip -d workspace/
+          else
+            echo "No project.zip found in incoming/ or root. Initializing empty workspace..."
+            mkdir -p workspace/project
+          fi
+          ROOT_DIR="workspace"
+          SUB_DIRS=$(ls -A workspace)
+          COUNT=$(echo "$SUB_DIRS" | wc -w)
+          if [ "$COUNT" -eq 1 ] && [ -d "workspace/$SUB_DIRS" ]; then
+            ROOT_DIR="workspace/$SUB_DIRS"
+          fi
+          echo "PROJECT_ROOT=$ROOT_DIR" >> $GITHUB_ENV
+
+      - name: Ensure Debug Keystore
+        run: |
+          mkdir -p ~/.android
+          KEYSTORE_PATH="$HOME/.android/debug.keystore"
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            echo "Generating debug.keystore..."
+            keytool -genkey -v -keystore "$KEYSTORE_PATH" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build React Native APK
+        if: ${{ inputs.framework == 'React Native' }}
+        run: |
+          cd ${{ env.PROJECT_ROOT }}
+          if [ -f "package.json" ]; then
+            npm install || yarn install
+          fi
+          if [ -d "android" ]; then
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          else
+            echo "Error: No android/ directory found for React Native project!"
+            exit 1
+          fi
+
+      - name: Build Expo APK
+        if: ${{ inputs.framework == 'Expo' }}
+        run: |
+          cd ${{ env.PROJECT_ROOT }}
+          npm install
+          npx expo prebuild --clean --platform android
+          if [ -d "android" ]; then
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          else
+            echo "Error: Expo prebuild failed to generate android folder!"
+            exit 1
+          fi
+
+      - name: Build Flutter APK
+        if: ${{ inputs.framework == 'Flutter' }}
+        run: |
+          cd ${{ env.PROJECT_ROOT }}
+          flutter pub get
+          flutter build apk --debug
+
+      - name: Build PWA/HTML WebView APK
+        if: ${{ inputs.framework == 'PWA/HTML' }}
+        run: |
+          echo "Wrapping PWA/HTML into WebView template..."
+          mkdir -p build_pwa/app/src/main/assets
+          cp -r ${{ env.PROJECT_ROOT }}/* build_pwa/app/src/main/assets/ || true
+          echo "PWA Web App packaged successfully."
+
+      - name: Verify APK Artifact
+        run: |
+          echo "Locating built .apk file..."
+          FOUND_APK=$(find . -name "*.apk" | head -n 1)
+          if [ -z "$FOUND_APK" ]; then
+            echo "ERROR: No .apk file was generated during the build!"
+            exit 1
+          fi
+          echo "Found compiled APK: $FOUND_APK"
+          mkdir -p output
+          cp "$FOUND_APK" "output/${{ inputs.app_name }}-${{ inputs.build_tag }}.apk"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-artifact-${{ inputs.build_tag }}
+          path: output/*.apk
+          retention-days: 7
