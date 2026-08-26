@@ -82,10 +82,7 @@ jobs:
       - name: Build debug APK (Expo / React Native)
         if: ${{ github.event.inputs.framework == 'expo' || github.event.inputs.framework == 'react-native' }}
         working-directory: project/android
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: "1"
-          ORG_GRADLE_PROJECT_newArchEnabled: "false"
-        run: ./gradlew assembleDebug --no-daemon --max-workers=1 -Dorg.gradle.jvmargs="-Xmx3072m"
+        run: ./gradlew assembleDebug --no-daemon --max-workers=1 -Pandroid.injected.build.threads=1 -Dorg.gradle.jvmargs="-Xmx2560m"
 
       - name: Build debug APK (Flutter)
         if: ${{ github.event.inputs.framework == 'flutter' }}
