@@ -15,90 +15,47 @@ on:
         description: 'Android Package Name / ID'
         required: false
         default: 'com.apkforge.app'
-      zip_url:
-        description: 'Public URL of the uploaded source ZIP'
+      build_tag:
+        description: 'Unique Build Tag ID'
         required: true
+        default: 'build-001'
 
 jobs:
-  build:
+  build-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout runner repo
+      - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Free disk space and add swap
-        run: |
-          sudo swapoff -a
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
-      - name: Download and extract source ZIP
-        run: |
-          curl -L "${{ github.event.inputs.zip_url }}" -o source.zip
-          mkdir -p project
-          unzip -q source.zip -d project
-
-      - name: Set up JDK 17
+      - name: Set up Java JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'
           java-version: '17'
-
-      - name: Set up Node.js
-        if: ${{ github.event.inputs.framework == 'expo' || github.event.inputs.framework == 'react-native' }}
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Install JS dependencies
-        if: ${{ github.event.inputs.framework == 'expo' || github.event.inputs.framework == 'react-native' }}
-        working-directory: project
-        run: npm install
-
-      - name: Expo prebuild (generates native android/ folder)
-        if: ${{ github.event.inputs.framework == 'expo' }}
-        working-directory: project
-        run: npx expo prebuild --platform android --non-interactive
-
-      - name: Set up Flutter
-        if: ${{ github.event.inputs.framework == 'flutter' }}
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Flutter pub get
-        if: ${{ github.event.inputs.framework == 'flutter' }}
-        working-directory: project
-        run: flutter pub get
-
-      - name: Grant execute permission for gradlew
-        if: ${{ github.event.inputs.framework != 'pwa' }}
-        working-directory: project/android
-        run: chmod +x gradlew
-
-      - name: Build debug APK (Expo / React Native)
-        if: ${{ github.event.inputs.framework == 'expo' || github.event.inputs.framework == 'react-native' }}
-        working-directory: project/android
-        run: ./gradlew assembleDebug --no-daemon --max-workers=1 -Pandroid.injected.build.threads=1 -Dorg.gradle.jvmargs="-Xmx2560m"
-
-      - name: Build debug APK (Flutter)
-        if: ${{ github.event.inputs.framework == 'flutter' }}
-        working-directory: project
-        run: flutter build apk --debug
-
-      - name: Locate built APK
-        id: locate
+      - name: Extract Source ZIP Archive
         run: |
-          APK_PATH=$(find project -name "*.apk" | head -n 1)
-          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
-          echo "Found APK at: $APK_PATH"
-
-      - name: Upload APK as build artifact
+          mkdir -p workspace_extracted
+          unzip -q "builds/${{ inputs.build_tag }}.zip" -d workspace_extracted || cp -R . workspace_extracted/
+      - name: Ensure Android Debug Keystore
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug"
+      - name: Build APK Based on Framework
+        run: |
+          cd workspace_extracted
+          if [ "${{ inputs.framework }}" = "expo" ]; then
+            npm install && npx expo prebuild --platform android && cd android && ./gradlew assembleDebug
+          elif [ "${{ inputs.framework }}" = "flutter" ]; then
+            flutter pub get && flutter build apk --debug
+          else
+            npm install && cd android && ./gradlew assembleDebug
+          fi
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.app_name }}-debug-apk
-          path: ${{ steps.locate.outputs.apk_path }}
-          retention-days: 7
+          name: ${{ inputs.app_name }}-apk
+          path: /**/*.apk
