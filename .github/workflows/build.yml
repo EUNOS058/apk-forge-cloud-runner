@@ -26,6 +26,15 @@ jobs:
       - name: Checkout runner repo
         uses: actions/checkout@v4
 
+      - name: Free disk space and add swap
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       - name: Download and extract source ZIP
         run: |
           curl -L "${{ github.event.inputs.zip_url }}" -o source.zip
@@ -73,7 +82,10 @@ jobs:
       - name: Build debug APK (Expo / React Native)
         if: ${{ github.event.inputs.framework == 'expo' || github.event.inputs.framework == 'react-native' }}
         working-directory: project/android
-        run: ./gradlew assembleDebug --no-daemon --parallel
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
+          ORG_GRADLE_PROJECT_newArchEnabled: "false"
+        run: ./gradlew assembleDebug --no-daemon --max-workers=1 -Dorg.gradle.jvmargs="-Xmx3072m"
 
       - name: Build debug APK (Flutter)
         if: ${{ github.event.inputs.framework == 'flutter' }}
